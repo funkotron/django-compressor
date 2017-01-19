@@ -64,12 +64,11 @@ class Command(BaseCommand):
         loaders = []
         # If template loader is CachedTemplateLoader, return the loaders
         # that it wraps around. So if we have
-        # TEMPLATE_LOADERS = (
-        #    ('django.template.loaders.cached.Loader', (
-        #        'django.template.loaders.filesystem.Loader',
-        #        'django.template.loaders.app_directories.Loader',
-        #    )),
-        # )
+        template_source_loaders = (
+           'django.template.loaders.cached.Loader', 
+            'django.template.loaders.filesystem.Loader',
+            'django.template.loaders.app_directories.Loader',
+        )
         # The loaders will return django.template.loaders.filesystem.Loader
         # and django.template.loaders.app_directories.Loader
         # The cached Loader and similar ones include a 'loaders' attribute
