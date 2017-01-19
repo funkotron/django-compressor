@@ -1,3 +1,4 @@
+from __future__ import unicode_literals
 # flake8: noqa
 import os
 import sys
@@ -11,10 +12,11 @@ from django.core.management.base import BaseCommand, CommandError
 import django.template
 from django.template import Context
 from django.utils import six
+from django.utils.encoding import smart_text
 from django.template.loader import get_template  # noqa Leave this in to preload template locations
 from django.template import engines
 
-from compressor.cache import get_offline_hexdigest, write_offline_manifest
+from compressor.cache import get_offline_hexdigest, write_offline_manifest, get_offline_manifest
 from compressor.conf import settings
 from compressor.exceptions import (OfflineGenerationError, TemplateSyntaxError,
                                    TemplateDoesNotExist)
@@ -47,9 +49,11 @@ class Command(BaseCommand):
                                  "(which defaults to STATIC_ROOT). Be aware that using this "
                                  "can lead to infinite recursion if a link points to a parent "
                                  "directory of itself.", dest='follow_links')
-        parser.add_argument('--engine', default="django", action="store",
-                            help="Specifies the templating engine. jinja2 or django",
-                            dest="engine")
+        parser.add_argument('--engine', default=[], action="append",
+                            help="Specifies the templating engine. jinja2 and django are "
+                                 "supported. It may be a specified more than once for "
+                                 "multiple engines. If not specified, django engine is used.",
+                            dest="engines")
 
     def get_loaders(self):
         template_source_loaders = []
@@ -60,11 +64,12 @@ class Command(BaseCommand):
         loaders = []
         # If template loader is CachedTemplateLoader, return the loaders
         # that it wraps around. So if we have
-        template_source_loaders = (
-               'django.template.loaders.filesystem.Loader',
-               'django.template.loaders.app_directories.Loader',
-        )
-        
+        # TEMPLATE_LOADERS = (
+        #    ('django.template.loaders.cached.Loader', (
+        #        'django.template.loaders.filesystem.Loader',
+        #        'django.template.loaders.app_directories.Loader',
+        #    )),
+        # )
         # The loaders will return django.template.loaders.filesystem.Loader
         # and django.template.loaders.app_directories.Loader
         # The cached Loader and similar ones include a 'loaders' attribute
@@ -103,7 +108,6 @@ class Command(BaseCommand):
         verbosity = int(options.get("verbosity", 0))
         if not log:
             log = StringIO()
-        # import ipdb; ipdb.set_trace()
         if not self.get_loaders():
             raise OfflineGenerationError("No template loaders defined. You "
                                          "must set TEMPLATE_LOADERS in your "
@@ -119,7 +123,7 @@ class Command(BaseCommand):
                         'get_template_sources', None)
                     if get_template_sources is None:
                         get_template_sources = loader.get_template_sources
-                    paths.update(str(origin) for origin in get_template_sources(''))
+                    paths.update(smart_text(origin) for origin in get_template_sources(''))
                 except (ImportError, AttributeError, TypeError):
                     # Yeah, this didn't work out so well, let's move on
                     pass
@@ -177,7 +181,7 @@ class Command(BaseCommand):
                 continue
             except TemplateSyntaxError as e:  # broken template -> ignore
                 if verbosity > 0:
-                    log.write("Invalid template %s: %s\n" % (template_name, e))
+                    log.write("Invalid template %s: %s\n" % (template_name, smart_text(e)))
                 continue
             except TemplateDoesNotExist:  # non existent template -> ignore
                 if verbosity > 0:
@@ -197,7 +201,8 @@ class Command(BaseCommand):
                 except (TemplateDoesNotExist, TemplateSyntaxError) as e:
                     # Could be an error in some base template
                     if verbosity > 0:
-                        log.write("Error parsing template %s: %s\n" % (template_name, e))
+                        log.write("Error parsing template %s: %s\n" %
+                                  (template_name, smart_text(e)))
                     continue
                 if nodes:
                     template.template_name = template_name
@@ -244,7 +249,10 @@ class Command(BaseCommand):
                         result = parser.render_node(template, context, node)
                     except Exception as e:
                         raise CommandError("An error occurred during rendering %s: "
-                                           "%s" % (template.template_name, e))
+                                           "%s" % (template.template_name, smart_text(e)))
+                    result = result.replace(
+                        settings.COMPRESS_URL, settings.COMPRESS_URL_PLACEHOLDER
+                    )
                     offline_manifest[key] = result
                     context.pop()
                     results.append(result)
@@ -288,8 +296,16 @@ class Command(BaseCommand):
                 raise CommandError(
                     "Offline compression is disabled. Set "
                     "COMPRESS_OFFLINE or use the --force to override.")
-        self.compress(sys.stdout, **options)
 
+        options.setdefault("log", sys.stdout)
 
+        manifest = {}
+        engines = [e.strip() for e in options.get("engines", [])] or ["django"]
+        for engine in engines:
+            opts = options.copy()
+            opts["engine"] = engine
+            self.compress(**opts)
+            manifest.update(get_offline_manifest())
+        write_offline_manifest(manifest)
 
 Command.requires_system_checks = False
